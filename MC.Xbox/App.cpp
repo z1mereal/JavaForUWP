@@ -1787,7 +1787,7 @@ static MainMenuAction ShowMainMenu(ICoreWindow* window, const LaunchAuthConfig& 
     }
 
     AuthUiState state;
-    state.title = L"Bandit Launcher";
+    state.title = L"Java For UWP";
     state.showDeviceCode = false;
     state.showMainMenu = true;
     state.status = L"Signed in as " + a2w(authConfig.username.c_str());
