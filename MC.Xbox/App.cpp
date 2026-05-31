@@ -813,17 +813,25 @@ static std::wstring DetectGraphicsRuntimeName() {
         WriteLogF(L"Device SKU: %s", sku.c_str());
         WriteLogF(L"Device friendly name: %s", friendlyName.c_str());
 
-        if (ContainsInsensitive(probe, L"xbox one") ||
-            ContainsInsensitive(probe, L"xboxone") ||
-            ContainsInsensitive(probe, L"durango")) {
-            return L"xboxone";
-        }
-
+        WriteLogF(L"Device probe string: %s", probe.c_str());
         if (ContainsInsensitive(probe, L"xbox series") ||
             ContainsInsensitive(probe, L"scarlett") ||
             ContainsInsensitive(probe, L"anaconda") ||
             ContainsInsensitive(probe, L"lockhart")) {
+            WriteLog(L"Device detected as Xbox Series family");
             return L"mesa";
+        }
+
+        if (ContainsInsensitive(probe, L"xbox one") ||
+            ContainsInsensitive(probe, L"xboxone") ||
+            ContainsInsensitive(probe, L"durango")) {
+            WriteLog(L"Device detected as Xbox One family");
+            return L"xboxone";
+        }
+
+        if (ContainsInsensitive(probe, L"xbox")) {
+            WriteLog(L"Device mentions Xbox but did not match known Series patterns; assuming Xbox One");
+            return L"xboxone";
         }
     } catch (...) {
         WriteLog(L"Device graphics runtime detection failed; defaulting to Mesa");
