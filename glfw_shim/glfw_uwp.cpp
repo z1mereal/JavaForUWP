@@ -1324,6 +1324,13 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID) {
 extern "C" __declspec(dllexport) int glfwInit(void) {
     ShimLog("glfwInit");
     if (g_initialised) return GLFW_TRUE;
+
+    wchar_t runtimeDir[MAX_PATH];
+    wchar_t packagePrefix[MAX_PATH];
+    if (!SelectGraphicsRuntimeDir(runtimeDir, MAX_PATH, packagePrefix, MAX_PATH)) {
+        ShimLog("glfwInit: early graphics runtime selection failed; will retry later");
+    }
+
     if (!AcquireCoreWindow()) return GLFW_FALSE;
     RefreshWindowMetrics(false);
     g_fake_window = {0x58574C47u, g_width, g_height, FALSE, NULL};
