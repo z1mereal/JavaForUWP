@@ -41,6 +41,7 @@
 #include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.Web.Http.h>
 #include <winrt/Windows.Web.Http.Headers.h>
+#include <winrt/Windows.Data.Json.h>
 
 #include "runtime_config.h"
 #include "qr_code.h"
@@ -63,6 +64,7 @@ using namespace ABI::Windows::Storage;
 using namespace ABI::Windows::UI::Core;
 using namespace ABI::Windows::Foundation;
 using namespace ABI::Windows::Foundation::Collections;
+using namespace winrt::Windows::Data::Json;
 
 static std::wstring g_logDir;
 static bool g_setWindowCalled = false;
@@ -1024,6 +1026,91 @@ static HttpResult HttpGetBearer(const wchar_t* url, const std::string& token) {
     return result;
 }
 
+static HttpResult HttpGetString(const wchar_t* url, const wchar_t* userAgent = nullptr) {
+    HttpResult result;
+    try {
+        using namespace winrt::Windows::Foundation;
+        using namespace winrt::Windows::Web::Http;
+        using namespace winrt::Windows::Web::Http::Headers;
+
+        HttpClient client;
+        if (userAgent && *userAgent) {
+            client.DefaultRequestHeaders().UserAgent().ParseAdd(userAgent);
+        } else {
+            client.DefaultRequestHeaders().UserAgent().ParseAdd(L"JavaUWPLauncher/1.0");
+        }
+        client.DefaultRequestHeaders().Accept().ParseAdd(L"application/vnd.github.v3+json");
+        HttpRequestMessage request(HttpMethod::Get(), winrt::Windows::Foundation::Uri(url));
+        HttpResponseMessage response = client.SendRequestAsync(request).get();
+        result.status = static_cast<int>(response.StatusCode());
+        result.body = winrt::to_string(response.Content().ReadAsStringAsync().get());
+    } catch (const winrt::hresult_error& ex) {
+        WriteLogF(L"HTTP GET failed url=%s hr=0x%08X msg=%s",
+            url, static_cast<unsigned int>(ex.code()), ex.message().c_str());
+    }
+    return result;
+}
+
+static std::wstring ParseGithubCommitChangelog(const std::string& jsonBody, int maxCommits = 5) {
+    try {
+        JsonArray commits = JsonValue::Parse(winrt::to_hstring(jsonBody)).GetArray();
+        std::wstring changelog = L"Changelog:\n";
+        int count = 0;
+        for (auto&& item : commits) {
+            if (count >= maxCommits) break;
+            if (!item.IsObject()) continue;
+            JsonObject commitObj = item.GetObject();
+            if (!commitObj.HasKey(L"commit")) continue;
+            JsonObject commitDetail = commitObj.GetNamedObject(L"commit");
+            if (!commitDetail.HasKey(L"message")) continue;
+            std::wstring message = commitDetail.GetNamedString(L"message").c_str();
+            // Use first line of commit message
+            size_t newline = message.find_first_of(L"\r\n");
+            if (newline != std::wstring::npos) {
+                message = message.substr(0, newline);
+            }
+            // Collapse internal newlines/spaces
+            std::wstring cleaned;
+            bool lastSpace = false;
+            for (wchar_t c : message) {
+                if (c == L'\r' || c == L'\n' || c == L'\t' || c == L' ') {
+                    if (!lastSpace) {
+                        cleaned.push_back(L' ');
+                        lastSpace = true;
+                    }
+                } else {
+                    cleaned.push_back(c);
+                    lastSpace = false;
+                }
+            }
+            if (cleaned.size() > 72) {
+                cleaned = cleaned.substr(0, 69) + L"...";
+            }
+            changelog += L"- " + cleaned + L"\n";
+            ++count;
+        }
+        if (count == 0) {
+            return L"Changelog unavailable";
+        }
+        return changelog;
+    } catch (const winrt::hresult_error& ex) {
+        WriteLogF(L"GitHub changelog parse failed hr=0x%08X msg=%s",
+            static_cast<unsigned int>(ex.code()), ex.message().c_str());
+    } catch (...) {
+        WriteLog(L"GitHub changelog parse failed with unknown error");
+    }
+    return L"Changelog unavailable";
+}
+
+static std::wstring FetchGithubCommitChangelog(int maxCommits = 5) {
+    const std::wstring url = L"https://api.github.com/repos/z1mereal/JavaForUWP/commits?per_page=" + std::to_wstring(maxCommits);
+    HttpResult result = HttpGetString(url.c_str());
+    if (!result.success()) {
+        return L"Changelog unavailable";
+    }
+    return ParseGithubCommitChangelog(result.body, maxCommits);
+}
+
 static bool SaveRefreshToken(const std::string& refreshToken) {
     if (refreshToken.empty()) return false;
     try {
@@ -1349,6 +1436,15 @@ public:
             const float inset = 8.0f;
             const D2D1_RECT_F pano = D2D1::RectF(preview.left + inset, preview.top + inset, preview.right - inset, preview.bottom - inset);
             DrawPanorama(pano, state.animation);
+
+            if (!state.changelogText.empty()) {
+                const D2D1_RECT_F changelogPanel = D2D1::RectF(pano.left + 12.0f, pano.top + 12.0f, pano.left + 440.0f, pano.top + 196.0f);
+                ComPtr<ID2D1SolidColorBrush> overlay;
+                d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x000000, 0.65f), overlay.GetAddressOf());
+                d2dContext_->FillRectangle(changelogPanel, overlay.Get());
+                const D2D1_RECT_F changelogTextRect = D2D1::RectF(changelogPanel.left + 16.0f, changelogPanel.top + 16.0f, changelogPanel.right - 16.0f, changelogPanel.bottom - 16.0f);
+                DrawText(state.changelogText.c_str(), smallFormat_.Get(), changelogTextRect, white.Get());
+            }
 
             if (!state.detail.empty()) {
                 const D2D1_RECT_F detailRect = D2D1::RectF(preview.left + 26.0f, preview.bottom - 82.0f, preview.right - 26.0f, preview.bottom - 24.0f);
@@ -1800,6 +1896,7 @@ static MainMenuAction ShowMainMenu(ICoreWindow* window, const LaunchAuthConfig& 
     state.showMainMenu = true;
     state.status = L"Signed in as " + a2w(authConfig.username.c_str());
     state.detail = L"Made with love by z1me";
+    state.changelogText = FetchGithubCommitChangelog(5);
 
     int selected = 0;
     bool upWasDown = false;
