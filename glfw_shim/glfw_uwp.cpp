@@ -244,6 +244,7 @@ typedef uint32_t EGLenum;
 #define EGL_OPENGL_BIT 0x0008
 #define EGL_OPENGL_ES2_BIT 0x0004
 #define EGL_OPENGL_ES3_BIT_KHR 0x00000040
+#define EGL_OPENGL_ES2_BIT 0x0004
 #define EGL_OPENGL_API 0x30A2
 #define EGL_OPENGL_ES_API 0x30A0
 #define EGL_VENDOR 0x3053
@@ -297,6 +298,8 @@ static HMODULE g_libEGL = NULL;
 static HMODULE g_opengl32 = NULL;
 static HMODULE g_libGLESv2 = NULL;
 static BOOL g_graphicsRuntimeUsesGles = FALSE;
+static int g_contextVersionMajor = 3;
+static int g_contextVersionMinor = 2;
 static BOOL g_initialised = FALSE;
 static BOOL g_should_close = FALSE;
 static int g_width = 1920;
@@ -1145,7 +1148,15 @@ static bool CreateEglContext() {
         return false;
     }
 
-    const EGLint renderableType = g_graphicsRuntimeUsesGles ? EGL_OPENGL_ES3_BIT_KHR : EGL_OPENGL_BIT;
+    EGLint renderableType = g_graphicsRuntimeUsesGles ? EGL_OPENGL_ES3_BIT_KHR : EGL_OPENGL_BIT;
+    g_contextVersionMajor = g_graphicsRuntimeUsesGles ? 3 : 3;
+    g_contextVersionMinor = g_graphicsRuntimeUsesGles ? 0 : 2;
+
+    const auto chooseConfig = [&](const EGLint* attrs) {
+        EGLint numConfigs = 0;
+        return p_eglChooseConfig(g_eglDisplay, attrs, &g_eglConfig, 1, &numConfigs) && numConfigs >= 1;
+    };
+
     const EGLint configAttrs[] = {
         EGL_RED_SIZE, 8,
         EGL_GREEN_SIZE, 8,
@@ -1158,20 +1169,60 @@ static bool CreateEglContext() {
         EGL_NONE
     };
 
-    EGLint numConfigs = 0;
-    if (!p_eglChooseConfig(g_eglDisplay, configAttrs, &g_eglConfig, 1, &numConfigs) || numConfigs < 1) {
-        ShimLog("eglChooseConfig failed with requested stencil buffer; retrying without stencil...");
-        const EGLint configAttrsNoStencil[] = {
+    const EGLint configAttrsNoStencil[] = {
+        EGL_RED_SIZE, 8,
+        EGL_GREEN_SIZE, 8,
+        EGL_BLUE_SIZE, 8,
+        EGL_ALPHA_SIZE, 8,
+        EGL_DEPTH_SIZE, 24,
+        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+        EGL_RENDERABLE_TYPE, renderableType,
+        EGL_NONE
+    };
+
+    bool configFound = chooseConfig(configAttrs);
+    if (!configFound && g_graphicsRuntimeUsesGles && renderableType == EGL_OPENGL_ES3_BIT_KHR) {
+        ShimLog("eglChooseConfig ES3 failed; trying ES2 renderable type");
+        renderableType = EGL_OPENGL_ES2_BIT;
+        g_contextVersionMajor = 2;
+        g_contextVersionMinor = 0;
+        const EGLint configAttrsEs2[] = {
             EGL_RED_SIZE, 8,
             EGL_GREEN_SIZE, 8,
             EGL_BLUE_SIZE, 8,
             EGL_ALPHA_SIZE, 8,
             EGL_DEPTH_SIZE, 24,
+            EGL_STENCIL_SIZE, 8,
             EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
             EGL_RENDERABLE_TYPE, renderableType,
             EGL_NONE
         };
-        if (!p_eglChooseConfig(g_eglDisplay, configAttrsNoStencil, &g_eglConfig, 1, &numConfigs) || numConfigs < 1) {
+        configFound = chooseConfig(configAttrsEs2);
+        if (!configFound) {
+            ShimLog("eglChooseConfig ES2 failed with requested stencil buffer; retrying without stencil...");
+            const EGLint configAttrsEs2NoStencil[] = {
+                EGL_RED_SIZE, 8,
+                EGL_GREEN_SIZE, 8,
+                EGL_BLUE_SIZE, 8,
+                EGL_ALPHA_SIZE, 8,
+                EGL_DEPTH_SIZE, 24,
+                EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+                EGL_RENDERABLE_TYPE, renderableType,
+                EGL_NONE
+            };
+            if (!chooseConfig(configAttrsEs2NoStencil)) {
+                ReportEglError("eglChooseConfig (ES3 and ES2, with and without stencil)");
+                return false;
+            }
+            ShimLog("eglChooseConfig ES2 succeeded without stencil buffer");
+        } else {
+            ShimLog("eglChooseConfig ES2 succeeded");
+        }
+    }
+
+    if (!configFound) {
+        ShimLog("eglChooseConfig failed with requested stencil buffer; retrying without stencil...");
+        if (!chooseConfig(configAttrsNoStencil)) {
             ReportEglError("eglChooseConfig (with and without stencil)");
             return false;
         }
@@ -1406,9 +1457,9 @@ extern "C" __declspec(dllexport) int glfwGetWindowAttrib(GLFWwindow*, int a) {
     case GLFW_CLIENT_API:
         return g_graphicsRuntimeUsesGles ? GLFW_OPENGL_ES_API : GLFW_OPENGL_API;
     case GLFW_CONTEXT_VERSION_MAJOR:
-        return 3;
+        return g_contextVersionMajor;
     case GLFW_CONTEXT_VERSION_MINOR:
-        return g_graphicsRuntimeUsesGles ? 0 : 2;
+        return g_contextVersionMinor;
     case GLFW_OPENGL_PROFILE:
         return g_graphicsRuntimeUsesGles ? 0 : GLFW_OPENGL_CORE_PROFILE;
     case GLFW_CONTEXT_CREATION_API:
