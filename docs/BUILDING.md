@@ -5,7 +5,7 @@ This page covers a clean local build from the repo root.
 The build produces a signed UWP package at:
 
 ```text
-output\JavaForUWP_1.0.0.0.appx
+output\BanditLauncher_1.0.0.0.appx
 ```
 
 ## Requirements
@@ -245,7 +245,7 @@ The build script:
 7. Copies Minecraft libraries, versions, Fabric data, assets, natives, bundled mods, Mesa DLLs, and the JRE.
 8. Injects the custom `glfw.dll` into the LWJGL GLFW native JAR.
 9. Generates UWP tile and splash assets from `MC.Xbox\Assets\Java_UWP_Icon.png`.
-10. Creates and signs `output\JavaForUWP_1.0.0.0.appx`.
+10. Creates and signs `output\BanditLauncher_1.0.0.0.appx`.
 11. Deletes `staging\package` unless `-KeepStaging` is set.
 
 ## Clean outputs
@@ -288,4 +288,3 @@ To include all ignored files, including downloaded cache files:
 - Missing native DLLs: fill `staging\cache\natives-1.21` with the native DLLs required by the Minecraft and LWJGL runtime.
 - Package signing failure: delete the ignored local `.pfx` under `staging\certs` and rerun `build.ps1`, or set `APPX_CERT_SUBJECT`.
 - If you can't find your appdata folder, type `%appdata%` into your address bar in your file explorer.
-na

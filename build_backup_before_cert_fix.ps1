@@ -478,85 +478,27 @@ if ($LASTEXITCODE -ne 0) { throw "Asset generation failed" }
 Write-Host "=== Packaging ==="
 $cert = Join-Path $certDir $ProjectConfig.CertificateFileName
 $appx = Join-Path $outDir $ProjectConfig.AppxFileName
-$certName = if ($env:APPX_CERT_SUBJECT) { $env:APPX_CERT_SUBJECT } else { "CN=JavaUWP" }
+$certName = if ($env:APPX_CERT_SUBJECT) { $env:APPX_CERT_SUBJECT } else { $ProjectConfig.DefaultCertificateSubject }
 
-function New-JavaUwpSigningCert {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Subject
-    )
-
-    New-SelfSignedCertificate `
-        -Type CodeSigningCert `
-        -Subject $Subject `
-        -FriendlyName "JavaUWP Dev" `
-        -KeyUsage DigitalSignature `
-        -CertStoreLocation "Cert:\CurrentUser\My" `
-        -TextExtension @(
-            "2.5.29.37={text}1.3.6.1.5.5.7.3.3",
-            "2.5.29.19={text}"
-        )
-}
-
-# Find usable certs. ObjectId 1.3.6.1.5.5.7.3.3 is Code Signing.
-$allSigningCertCandidates = @(
-    Get-ChildItem Cert:\CurrentUser\My |
-        Where-Object {
-            $_.HasPrivateKey -and
-            (
-                ($_.EnhancedKeyUsageList | Where-Object {
-                    $_.FriendlyName -eq "Code Signing" -or
-                    $_.ObjectId -eq "1.3.6.1.5.5.7.3.3"
-                }) -or
-                $_.Subject -like "*BanditVault*" -or
-                $_.Subject -like "*JavaUWP*"
-            )
-        }
-)
-
-if (-not $allSigningCertCandidates -or $allSigningCertCandidates.Count -eq 0) {
-    Write-Host "No signing certificate found. Creating JavaUWP dev certificate..."
-    $c = New-JavaUwpSigningCert -Subject $certName
-
-    New-Item -ItemType Directory -Force -Path $certDir | Out-Null
+if (-not (Test-Path $cert)) {
+    $c = New-SelfSignedCertificate -Type CodeSigningCert -Subject $certName `
+        -KeyUsage DigitalSignature -CertStoreLocation "Cert:\CurrentUser\My" `
+        -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3","2.5.29.19={text}")
     Export-PfxCertificate -Cert $c -FilePath $cert `
         -Password (ConvertTo-SecureString $ProjectConfig.CertificatePassword -AsPlainText -Force) | Out-Null
-
-    $allSigningCertCandidates = @($c)
+    Write-Host "Generated cert"
 }
 
-$banditVaultSigningCertCandidates = @(
-    $allSigningCertCandidates |
-        Where-Object { $_.Subject -like "*BanditVault*" } |
-        Sort-Object NotBefore -Descending
-)
-
-$javaUwpSigningCertCandidates = @(
-    $allSigningCertCandidates |
-        Where-Object { $_.Subject -like "*JavaUWP*" } |
-        Sort-Object NotBefore -Descending
-)
-
-$otherSigningCertCandidates = @(
-    $allSigningCertCandidates |
-        Where-Object {
-            $_.Subject -notlike "*BanditVault*" -and
-            $_.Subject -notlike "*JavaUWP*"
-        } |
-        Sort-Object NotBefore -Descending
-)
-
-$signingCertCandidates = @($banditVaultSigningCertCandidates) +
-    @($javaUwpSigningCertCandidates) +
-    @($otherSigningCertCandidates)
-
-if (-not $signingCertCandidates -or $signingCertCandidates.Count -eq 0) {
-    throw "Signing certificate not found and automatic creation failed."
-}
-
-Write-Host "Signing certificate candidates:"
-foreach ($candidate in $signingCertCandidates) {
-    Write-Host "  $($candidate.Subject) [$($candidate.Thumbprint)]"
+$allSigningCertCandidates = Get-ChildItem Cert:\CurrentUser\My |
+    Where-Object {
+        $_.HasPrivateKey -and
+        ($_.EnhancedKeyUsageList | Where-Object { $_.FriendlyName -eq 'Code Signing' })
+    }
+$banditVaultSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -like '*BanditVault*' } | Sort-Object NotBefore -Descending
+$otherSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -notlike '*BanditVault*' } | Sort-Object NotBefore -Descending
+$signingCertCandidates = @($banditVaultSigningCertCandidates) + @($otherSigningCertCandidates)
+if (-not $signingCertCandidates) {
+    throw "Signing certificate not found in the current user certificate store."
 }
 
 $makeappx = Get-ChildItem "${sdkRoot}bin\$sdkVer\x64\makeappx.exe","${sdkRoot}bin\10.0.26100.0\x64\makeappx.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName

@@ -1787,11 +1787,11 @@ static MainMenuAction ShowMainMenu(ICoreWindow* window, const LaunchAuthConfig& 
     }
 
     AuthUiState state;
-    state.title = L"Java For UWP";
+    state.title = L"Minecraft Launcher";
     state.showDeviceCode = false;
     state.showMainMenu = true;
     state.status = L"Signed in as " + a2w(authConfig.username.c_str());
-    state.detail = L"Mods placeholder - no mod manager is wired yet.";
+    state.detail = L"Made with love by z1me";
 
     int selected = 0;
     bool upWasDown = false;
