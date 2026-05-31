@@ -165,6 +165,7 @@ typedef struct { unsigned char buttons[15]; float axes[6]; } GLFWgamepadstate;
 #define GLFW_MOD_NUM_LOCK        0x0020
 #define GLFW_CLIENT_API            0x00022001
 #define GLFW_OPENGL_API            0x00030001
+#define GLFW_OPENGL_ES_API         0x00030002
 #define GLFW_CONTEXT_VERSION_MAJOR 0x00022002
 #define GLFW_CONTEXT_VERSION_MINOR 0x00022003
 #define GLFW_OPENGL_PROFILE        0x00022008
@@ -247,6 +248,7 @@ typedef uint32_t EGLenum;
 #define EGL_OPENGL_ES_API 0x30A0
 #define EGL_VENDOR 0x3053
 #define EGL_VERSION 0x3054
+#define EGL_EXTENSIONS 0x3055
 #define EGL_CONTEXT_CLIENT_VERSION 0x3098
 #define EGL_CONTEXT_MAJOR_VERSION_KHR 0x3098
 #define EGL_CONTEXT_MINOR_VERSION_KHR 0x30FB
@@ -272,7 +274,13 @@ typedef void* (WINAPI* PFN_eglGetProcAddress)(const char*);
 typedef EGLint (WINAPI* PFN_eglGetError)(void);
 typedef EGLBoolean (WINAPI* PFN_eglGetConfigAttrib)(EGLDisplay, EGLConfig, EGLint, EGLint*);
 typedef const unsigned char* (APIENTRY* PFN_glGetString)(unsigned int);
+typedef const unsigned char* (APIENTRY* PFN_glGetStringi)(unsigned int, unsigned int);
+typedef void (APIENTRY* PFN_glGetIntegerv)(unsigned int, int*);
+
 typedef void (*PFN_proc_init)(void);
+
+#define GL_EXTENSIONS      0x1F03
+#define GL_NUM_EXTENSIONS  0x821D
 
 // ---------------------------------------------------------------------------
 // Global state
@@ -482,6 +490,11 @@ static bool SelectGraphicsRuntimeDir(
 
     // Legacy layout: older packages copied Mesa DLLs directly beside the exe
     // or under natives. Keep this so the Series path remains compatible.
+    if (g_graphicsRuntimeUsesGles) {
+        ShimLog("CRITICAL: Xbox One graphics runtime folder missing for %S; cannot use legacy Mesa lookup", requested);
+        return false;
+    }
+
     swprintf_s(runtimeDir, runtimeDirCch, L"%s", exeDir);
     swprintf_s(packagePrefix, packagePrefixCch, L"");
     g_graphicsRuntimeUsesGles = FALSE;
@@ -1147,8 +1160,22 @@ static bool CreateEglContext() {
 
     EGLint numConfigs = 0;
     if (!p_eglChooseConfig(g_eglDisplay, configAttrs, &g_eglConfig, 1, &numConfigs) || numConfigs < 1) {
-        ReportEglError("eglChooseConfig");
-        return false;
+        ShimLog("eglChooseConfig failed with requested stencil buffer; retrying without stencil...");
+        const EGLint configAttrsNoStencil[] = {
+            EGL_RED_SIZE, 8,
+            EGL_GREEN_SIZE, 8,
+            EGL_BLUE_SIZE, 8,
+            EGL_ALPHA_SIZE, 8,
+            EGL_DEPTH_SIZE, 24,
+            EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+            EGL_RENDERABLE_TYPE, renderableType,
+            EGL_NONE
+        };
+        if (!p_eglChooseConfig(g_eglDisplay, configAttrsNoStencil, &g_eglConfig, 1, &numConfigs) || numConfigs < 1) {
+            ReportEglError("eglChooseConfig (with and without stencil)");
+            return false;
+        }
+        ShimLog("eglChooseConfig succeeded without stencil buffer");
     }
 
     // Prefer the raw CoreWindow for Mesa's UWP EGL backend.
@@ -1377,13 +1404,13 @@ extern "C" __declspec(dllexport) int glfwGetWindowAttrib(GLFWwindow*, int a) {
     case GLFW_MAXIMIZED:
         return GLFW_FALSE;
     case GLFW_CLIENT_API:
-        return GLFW_OPENGL_API;
+        return g_graphicsRuntimeUsesGles ? GLFW_OPENGL_ES_API : GLFW_OPENGL_API;
     case GLFW_CONTEXT_VERSION_MAJOR:
         return 3;
     case GLFW_CONTEXT_VERSION_MINOR:
-        return 2;
+        return g_graphicsRuntimeUsesGles ? 0 : 2;
     case GLFW_OPENGL_PROFILE:
-        return GLFW_OPENGL_CORE_PROFILE;
+        return g_graphicsRuntimeUsesGles ? 0 : GLFW_OPENGL_CORE_PROFILE;
     case GLFW_CONTEXT_CREATION_API:
         return GLFW_EGL_CONTEXT_API;
     default:
@@ -1589,13 +1616,49 @@ extern "C" __declspec(dllexport) void glfwSwapInterval(int i) {
         p_eglSwapInterval(g_eglDisplay, i);
     }
 }
+extern "C" __declspec(dllexport) void* glfwGetProcAddress(const char* name);
+static bool QueryGlExtension(const char* name) {
+    if (!name) return false;
+    const char* extensions = nullptr;
+    if (p_eglQueryString && g_eglDisplay != EGL_NO_DISPLAY) {
+        extensions = p_eglQueryString(g_eglDisplay, EGL_EXTENSIONS);
+        if (extensions && strstr(extensions, name)) {
+            return true;
+        }
+    }
+
+    PFN_glGetString fnGetString = (PFN_glGetString)glfwGetProcAddress("glGetString");
+    if (fnGetString) {
+        const unsigned char* extStr = fnGetString(GL_EXTENSIONS);
+        if (extStr && strstr((const char*)extStr, name)) {
+            return true;
+        }
+    }
+
+    PFN_glGetStringi fnGetStringi = (PFN_glGetStringi)glfwGetProcAddress("glGetStringi");
+    PFN_glGetIntegerv fnGetIntegerv = (PFN_glGetIntegerv)glfwGetProcAddress("glGetIntegerv");
+    if (fnGetStringi && fnGetIntegerv) {
+        int count = 0;
+        fnGetIntegerv(GL_NUM_EXTENSIONS, &count);
+        for (int i = 0; i < count; ++i) {
+            const unsigned char* ext = fnGetStringi(GL_EXTENSIONS, (unsigned int)i);
+            if (ext && strcmp((const char*)ext, name) == 0) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 extern "C" __declspec(dllexport) int glfwExtensionSupported(const char* name) {
+    bool supported = QueryGlExtension(name);
     if (g_extension_log_count < 32) {
         ++g_extension_log_count;
-        ShimLog("glfwExtensionSupported #%d %s => false",
-            g_extension_log_count, name ? name : "(null)");
+        ShimLog("glfwExtensionSupported #%d %s => %s",
+            g_extension_log_count, name ? name : "(null)", supported ? "true" : "false");
     }
-    return GLFW_FALSE;
+    return supported ? GLFW_TRUE : GLFW_FALSE;
 }
 extern "C" __declspec(dllexport) void* glfwGetProcAddress(const char* name) {
     void* p = NULL;
